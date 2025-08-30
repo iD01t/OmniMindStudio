@@ -19,6 +19,4 @@ tiktoken
 pytesseract
 pynput
 keyrings.alt
-feature/omnimind-studio-final
 google-generativeai>=0.7.2
-main

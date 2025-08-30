@@ -500,7 +500,7 @@ def run_gui():
         
         def build_chat_area(self):
             chat_frame = ttk.Frame(self.root); chat_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0,5)); chat_frame.grid_rowconfigure(0, weight=1); chat_frame.grid_columnconfigure(0, weight=1)
-            self.chat_text = tk.Text(chat_frame, wrap="word", bg=self.WIDGET_BG, fg=self.FG_COLOR, insertbackground=self.FG_COLOR, font=self.TEXT_FONT, borderwidth=0, highlightthickness=0, relief="flat", state=tk.DISABLED, padding=(5,5))
+            self.chat_text = tk.Text(chat_frame, wrap="word", bg=self.WIDGET_BG, fg=self.FG_COLOR, insertbackground=self.FG_COLOR, font=self.TEXT_FONT, borderwidth=0, highlightthickness=0, relief="flat", state=tk.DISABLED, padx=5, pady=5)
             self.chat_text.grid(row=0, column=0, sticky="nsew")
             scrollbar = ttk.Scrollbar(chat_frame, orient="vertical", command=self.chat_text.yview); scrollbar.grid(row=0, column=1, sticky="ns"); self.chat_text.configure(yscrollcommand=scrollbar.set)
         
