@@ -1,3 +1,6 @@
+<img width="1024" height="1024" alt="ChatGPT Image Aug 29, 2025, 10_52_13 PM" src="https://github.com/user-attachments/assets/46d3536b-f7f3-424a-b4db-b4d82d30b23c" />
+
+
 # OmniMind Studio
 
 *The Indie-Pro AI Desktop That Beats Claude for Windows*
