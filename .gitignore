@@ -28,6 +28,32 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
+feature/omnimind-studio-final
+#  Usually these files are created by PyInstaller in a subdirectory of
+#  either 'dist' or 'build' (see PyInstaller's spec files)
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+
 #  Usually these files are written by a CI, but we want to ignore them if we run
 #  it locally.
 *.spec
@@ -40,11 +66,20 @@ installer/
 # Virtual Environments
 .env
 .venv/
+main
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+feature/omnimind-studio-final
+# Project-specific
+claudex_ultra.db
+claudex_ultra.db-journal
+*.log
+screenshots/
+screenshot_*.png
 
 # Tmp files
 *.log
@@ -59,3 +94,6 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+main
+
+#

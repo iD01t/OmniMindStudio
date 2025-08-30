@@ -15,6 +15,8 @@ import re
 import webbrowser
 import traceback
 import difflib
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Iterator
@@ -23,6 +25,39 @@ import subprocess
 
 # Headless check for CI environments
 HEADLESS = os.getenv("OMNI_HEADLESS") == "1"
+
+# --- Logging Setup ---
+def setup_logging():
+    """Sets up a rotating file logger."""
+    log_dir = ROOT_DIR / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / "omnimind.log"
+    
+    # Configure root logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Create a rotating file handler
+    handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=5, encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(threadName)s - %(message)s')
+    handler.setFormatter(formatter)
+    
+    # Add the handler to the root logger
+    logger.addHandler(handler)
+    
+    # Also log to console for immediate feedback, but only if not headless
+    if not HEADLESS:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
+        
+    logging.info("Logging initialized.")
+
+# --- Dependency Management ---
+# This application uses a requirements.txt file for dependency management.
+# This is a standard and robust approach that ensures a consistent environment.
+# A previous version used a self-bootstrapping mechanism, but it was removed
+# in favor of this more reliable method.
 
 # Safe, non-GUI imports
 try:
@@ -33,6 +68,7 @@ try:
     import keyring
     import anthropic
     from mistralai.client import MistralClient
+    import google.generativeai as genai
     import apsw
     import vectorlite_py
     import tiktoken
@@ -72,41 +108,46 @@ def create_db_connection(db_file):
     print("VectorLite extension loaded."); return conn
 
 def init_database(conn: apsw.Connection):
-    cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, project_id INTEGER, role TEXT NOT NULL, content TEXT NOT NULL, attachments TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (project_id) REFERENCES projects (id))")
-    cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS rag_documents (id INTEGER PRIMARY KEY, source_name TEXT NOT NULL, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-    cursor.execute("CREATE TABLE IF NOT EXISTS prompt_templates (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, template TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    conn.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, project_id INTEGER, role TEXT NOT NULL, content TEXT NOT NULL, attachments TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (project_id) REFERENCES projects (id))")
+    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS rag_documents (id INTEGER PRIMARY KEY, source_name TEXT NOT NULL, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    conn.execute("CREATE TABLE IF NOT EXISTS prompt_templates (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, template TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
     embedding_dim = 384
-    cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS rag_vectors USING vectorlite(embedding float32[{embedding_dim}], hnsw(max_elements=100000))")
+    conn.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS rag_vectors USING vectorlite(embedding float32[{embedding_dim}], hnsw(max_elements=100000))")
     print("Database initialized.")
 
 def get_setting(conn: apsw.Connection, key: str, default: str = "") -> str:
-    result = conn.cursor().execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return result[0] if result else default
+    # Use try/except to handle case where no row is found, which is more robust
+    try:
+        return conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()[0]
+    except (TypeError, IndexError):
+        return default
 
 def set_setting(conn: apsw.Connection, key: str, value: str):
-    conn.cursor().execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
 def list_projects(conn: apsw.Connection) -> List[str]:
-    projects = [row[0] for row in conn.cursor().execute("SELECT name FROM projects ORDER BY name")]
+    projects = [row[0] for row in conn.execute("SELECT name FROM projects ORDER BY name")]
     if not projects: add_project(conn, "Default"); return ["Default"]
     return projects
 
-def add_project(conn: apsw.Connection, name: str): conn.cursor().execute("INSERT OR IGNORE INTO projects (name) VALUES (?)", (name,))
+def add_project(conn: apsw.Connection, name: str): conn.execute("INSERT OR IGNORE INTO projects (name) VALUES (?)", (name,))
 def get_project_id(conn: apsw.Connection, name: str) -> int:
-    result = conn.cursor().execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()
-    return result[0] if result else None
+    try:
+        return conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()[0]
+    except (TypeError, IndexError):
+        return None
 
 def save_message(conn: apsw.Connection, project_name: str, role: str, content: str, attachments: List[Dict] = None):
     project_id = get_project_id(conn, project_name) or add_project(conn, project_name) or get_project_id(conn, project_name)
-    conn.cursor().execute("INSERT INTO messages (project_id, role, content, attachments) VALUES (?, ?, ?, ?)", (project_id, role, content, json.dumps(attachments or [])))
+    conn.execute("INSERT INTO messages (project_id, role, content, attachments) VALUES (?, ?, ?, ?)", (project_id, role, content, json.dumps(attachments or [])))
 
 def load_messages(conn: apsw.Connection, project_name: str, limit: int = 100) -> List[Dict]:
     project_id = get_project_id(conn, project_name)
     if not project_id: return []
-    rows = conn.cursor().execute("SELECT role, content, attachments, created_at FROM messages WHERE project_id = ? ORDER BY created_at ASC LIMIT ?", (project_id, limit))
+    rows = conn.execute("SELECT role, content, attachments, created_at FROM messages WHERE project_id = ? ORDER BY created_at ASC LIMIT ?", (project_id, limit))
     return [{"role": r[0], "content": r[1], "attachments": json.loads(r[2] or '[]'), "created_at": r[3]} for r in rows]
 
 class ChatBackend(ABC):
@@ -145,7 +186,9 @@ class OllamaBackend(ChatBackend):
         except Exception as e: yield f"Error: {e}"
 
 class OpenAIBackend(ChatBackend):
-    def __init__(self): self.api_key = SecretsManager.get_api_key("OpenAI"); self.client = openai.OpenAI(api_key=self.api_key) if self.api_key else None
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or SecretsManager.get_api_key("OpenAI")
+        self.client = openai.OpenAI(api_key=self.api_key) if self.api_key else None
     def get_name(self) -> str: return "OpenAI"
     def test_connection(self) -> Tuple[bool, str]:
         if not self.client: return False, "OpenAI API key not set."
@@ -165,7 +208,9 @@ class OpenAIBackend(ChatBackend):
         return f"${cost:.6f}"
 
 class AnthropicBackend(ChatBackend):
-    def __init__(self): self.api_key = SecretsManager.get_api_key("Anthropic"); self.client = anthropic.Anthropic(api_key=self.api_key) if self.api_key else None
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or SecretsManager.get_api_key("Anthropic")
+        self.client = anthropic.Anthropic(api_key=self.api_key) if self.api_key else None
     def get_name(self) -> str: return "Anthropic"
     def test_connection(self) -> Tuple[bool, str]:
         if not self.client: return False, "Anthropic API key not set."
@@ -182,7 +227,9 @@ class AnthropicBackend(ChatBackend):
         except Exception as e: yield f"Error: {e}"
 
 class MistralBackend(ChatBackend):
-    def __init__(self): self.api_key = SecretsManager.get_api_key("Mistral"); self.client = MistralClient(api_key=self.api_key) if self.api_key else None
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or SecretsManager.get_api_key("Mistral")
+        self.client = MistralClient(api_key=self.api_key) if self.api_key else None
     def get_name(self) -> str: return "Mistral"
     def test_connection(self) -> Tuple[bool, str]:
         if not self.client: return False, "Mistral API key not set."
@@ -195,11 +242,58 @@ class MistralBackend(ChatBackend):
                 if chunk.choices[0].delta.content: yield chunk.choices[0].delta.content
         except Exception as e: yield f"Error: {e}"
 
+class GeminiBackend(ChatBackend):
+    def __init__(self, api_key: str = None, model: str = "gemini-1.5-pro"):
+        self.api_key = api_key or SecretsManager.get_api_key("Gemini")
+        if self.api_key:
+            genai.configure(api_key=self.api_key)
+            self.client = genai.GenerativeModel(model)
+        else:
+            self.client = None
+
+    def get_name(self) -> str:
+        return "Gemini"
+
+    def test_connection(self) -> Tuple[bool, str]:
+        if not self.client:
+            return False, "Gemini API key not set."
+        try:
+            # Listing models is a lightweight way to test the key
+            models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            if not models:
+                 return False, "No text-generation models found."
+            return True, "Connected to Gemini."
+        except Exception as e:
+            return False, f"Error connecting to Gemini: {e}"
+
+    def stream_chat(self, messages: List[Dict], **kwargs) -> Iterator[str]:
+        if not self.client:
+            yield "Error: Gemini API key not set."
+            return
+        try:
+            # Convert to Gemini's expected format
+            gemini_messages = []
+            for msg in messages:
+                role = "user" if msg["role"] == "user" else "model"
+                gemini_messages.append({"role": role, "parts": [msg["content"]]})
+
+            # The 'model' kwarg is handled by the client being pre-configured
+            # We remove it from kwargs if present to avoid conflicts
+            kwargs.pop('model', None)
+
+            response = self.client.generate_content(gemini_messages, stream=True, **kwargs)
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            yield f"Error: {e}"
+
+
 class BackendRouter:
     def __init__(self): self.backends: Dict[str, ChatBackend] = {}; self.active_backend_name: Optional[str] = None; self._discover_and_init_backends()
     def _discover_and_init_backends(self):
         self.backends.clear()
-        for backend_class in [LMStudioBackend, OllamaBackend, OpenAIBackend, AnthropicBackend, MistralBackend]:
+        for backend_class in [LMStudioBackend, OllamaBackend, OpenAIBackend, AnthropicBackend, MistralBackend, GeminiBackend]:
             try: self.backends[backend_class().get_name()] = backend_class()
             except Exception as e: print(f"Failed to init backend {backend_class.__name__}: {e}")
         if not self.active_backend_name and self.backends: self.set_active_backend(list(self.backends.keys())[0])
@@ -218,11 +312,13 @@ class RAGSystem:
         return self._model
     def add_document(self, source_name: str, content: str):
         if not content.strip(): return
-        chunks = self._chunk_text(content); embeddings = self.model.encode(chunks, convert_to_numpy=True); cursor = self.conn.cursor()
-        for chunk, embedding in zip(chunks, embeddings):
-            cursor.execute("INSERT INTO rag_documents (source_name, content) VALUES (?, ?)", (source_name, chunk))
-            doc_id = cursor.getautoincrement()
-            cursor.execute("INSERT INTO rag_vectors (rowid, embedding) VALUES (?, ?)", (doc_id, embedding.tobytes()))
+        chunks = self._chunk_text(content); embeddings = self.model.encode(chunks, convert_to_numpy=True)
+        with self.conn:
+            for chunk, embedding in zip(chunks, embeddings):
+                self.conn.execute("INSERT INTO rag_documents (source_name, content) VALUES (?, ?)", (source_name, chunk))
+                doc_id = self.conn.last_insert_rowid()
+                self.conn.execute("INSERT INTO rag_vectors (rowid, embedding) VALUES (?, ?)", (doc_id, embedding.tobytes()))
+
     def _chunk_text(self, text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
         words = text.split(); chunks, i = [], 0
         while i < len(words): chunks.append(" ".join(words[i:i + chunk_size])); i += max(1, chunk_size - overlap)
@@ -231,7 +327,7 @@ class RAGSystem:
         try:
             query_embedding = self.model.encode([query], convert_to_numpy=True)
             sql = "SELECT t2.source_name, t2.content, t1.distance FROM rag_vectors AS t1 JOIN rag_documents AS t2 ON t1.rowid = t2.id WHERE knn_search(t1.embedding, knn_param(?, ?))"
-            return [{"source": r[0], "content": r[1], "distance": r[2]} for r in self.conn.cursor().execute(sql, (query_embedding.tobytes(), k))]
+            return [{"source": r[0], "content": r[1], "distance": r[2]} for r in self.conn.execute(sql, (query_embedding.tobytes(), k))]
         except Exception as e: print(f"RAG search error: {e}"); return []
 
 def process_file(file_path: str) -> str:
@@ -310,6 +406,7 @@ def run_gui():
     class OmniMindStudio:
         def __init__(self):
             self.root = tk.Tk(); self.root.title(f"{APP_NAME} v{APP_VERSION}"); self.root.geometry("1200x800"); self.root.minsize(1000, 600)
+            self.shutdown_event = threading.Event()
             self.setup_styles()
             self.db_conn = create_db_connection(DB_FILE)
             init_database(self.db_conn)
@@ -317,13 +414,40 @@ def run_gui():
             self.hotkey_manager = HotkeyManager('<ctrl>+<alt>+<space>', self.toggle_main_window_visibility)
             self.current_project = tk.StringVar(value="Default"); self.active_backend = tk.StringVar(value=self.backend_router.active_backend_name); self.temperature = tk.DoubleVar(value=0.7); self.max_tokens = tk.IntVar(value=2000); self.rag_enabled = tk.BooleanVar(value=True)
             self.attachments, self.messages = [], []
-
+            self.last_rag_results = []
+            
             self.latency_var = tk.StringVar(value="Latency: N/A"); self.tokens_var = tk.StringVar(value="Tokens: N/A"); self.cost_var = tk.StringVar(value="Cost: N/A")
             try: self.tokenizer = tiktoken.get_encoding("cl100k_base")
             except: self.tokenizer = None
-
-            self.load_settings(); self.build_ui(); self.load_project_data(); self.test_connection()
+            
+            self.load_settings(); self.build_ui(); self.load_project_data()
+            self.root.after(100, self.run_startup_health_checks) # Run after main window is drawn
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        def run_startup_health_checks(self):
+            """Runs a series of checks to ensure the app is ready."""
+            errors = []
+            # 1. Test DB Connection
+            try:
+                self.db_conn.execute("SELECT 1 FROM projects LIMIT 1")
+            except Exception as e:
+                errors.append(f"Database connection failed: {e}")
+
+            # 2. Test active backend connection
+            active_backend = self.backend_router.get_active_backend()
+            if active_backend:
+                success, message = active_backend.test_connection()
+                if not success:
+                    errors.append(f"Could not connect to '{active_backend.get_name()}': {message}")
+            else:
+                errors.append("No active backend selected or initialized.")
+
+            if errors:
+                error_message = "OmniMind Studio encountered problems on startup:\n\n" + "\n- ".join(errors)
+                error_message += "\n\nPlease check your settings and connections."
+                messagebox.showerror("Startup Diagnostics Failed", error_message)
+            else:
+                self.update_status("All systems nominal.")
 
         def on_closing(self): self.db_conn.close(); self.root.destroy()
 
@@ -352,16 +476,16 @@ def run_gui():
 
         def get_db_setting(self, key, default=""): return get_setting(self.db_conn, key, default)
         def set_db_setting(self, key, value): set_setting(self.db_conn, key, value)
-
+        
         def load_settings(self):
             self.temperature.set(float(self.get_db_setting("temperature", "0.7"))); self.max_tokens.set(int(self.get_db_setting("max_tokens", "2000"))); self.rag_enabled.set(self.get_db_setting("rag_enabled", "true").lower() == "true")
             if saved_backend := self.get_db_setting("active_backend"):
                 if saved_backend in self.backend_router.get_backend_names(): self.active_backend.set(saved_backend); self.backend_router.set_active_backend(saved_backend)
 
         def save_settings(self): self.set_db_setting("temperature", str(self.temperature.get())); self.set_db_setting("max_tokens", str(self.max_tokens.get())); self.set_db_setting("rag_enabled", str(self.rag_enabled.get()).lower()); self.set_db_setting("active_backend", self.active_backend.get())
-
+        
         def build_ui(self): self.root.grid_rowconfigure(1, weight=1); self.root.grid_columnconfigure(0, weight=1); self.build_toolbar(); self.build_chat_area(); self.build_input_area(); self.build_hud(); self.build_status_bar()
-
+        
         def build_toolbar(self):
             toolbar = ttk.Frame(self.root, padding=(10, 5)); toolbar.grid(row=0, column=0, sticky="ew")
             ttk.Label(toolbar, text="Project:").pack(side="left"); self.project_combo = ttk.Combobox(toolbar, textvariable=self.current_project, values=list_projects(self.db_conn), width=20); self.project_combo.pack(side="left", padx=(5, 10)); self.project_combo.bind("<<ComboboxSelected>>", self.on_project_change)
@@ -373,19 +497,19 @@ def run_gui():
             ttk.Button(toolbar, text="Compare", command=self.show_compare_window).pack(side="right")
             ttk.Button(toolbar, text="Export", command=self.export_chat).pack(side="right", padx=5)
             ttk.Button(toolbar, text="Settings", command=self.show_settings).pack(side="right")
-
+        
         def build_chat_area(self):
             chat_frame = ttk.Frame(self.root); chat_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0,5)); chat_frame.grid_rowconfigure(0, weight=1); chat_frame.grid_columnconfigure(0, weight=1)
             self.chat_text = tk.Text(chat_frame, wrap="word", bg=self.WIDGET_BG, fg=self.FG_COLOR, insertbackground=self.FG_COLOR, font=self.TEXT_FONT, borderwidth=0, highlightthickness=0, relief="flat", state=tk.DISABLED, padding=(5,5))
             self.chat_text.grid(row=0, column=0, sticky="nsew")
             scrollbar = ttk.Scrollbar(chat_frame, orient="vertical", command=self.chat_text.yview); scrollbar.grid(row=0, column=1, sticky="ns"); self.chat_text.configure(yscrollcommand=scrollbar.set)
-
+        
         def build_input_area(self):
             input_frame = ttk.Frame(self.root, padding=(10, 5)); input_frame.grid(row=2, column=0, sticky="ew"); input_frame.grid_columnconfigure(0, weight=1)
             self.input_entry = ttk.Entry(input_frame, font=self.TEXT_FONT); self.input_entry.grid(row=0, column=0, sticky="ew", ipady=5); self.input_entry.bind("<Return>", self.send_message)
             for i, (text, cmd) in enumerate([("Attach", self.attach_file), ("Voice", self.voice_input), ("Screenshot", self.take_screenshot), ("Send", self.send_message), ("Clear", self.clear_chat)]):
                 ttk.Button(input_frame, text=text, command=cmd).grid(row=0, column=i + 1, padx=(5,0))
-
+        
         def build_hud(self):
             hud_frame = ttk.Frame(self.root, padding=(10, 2)); hud_frame.grid(row=3, column=0, sticky="ew")
             ttk.Label(hud_frame, textvariable=self.latency_var).pack(side="left")
@@ -394,7 +518,7 @@ def run_gui():
 
         def build_status_bar(self):
             self.status_label = ttk.Label(self.root, text="Ready", anchor="w", padding=5); self.status_label.grid(row=4, column=0, sticky="ew", padx=10, pady=(0,5))
-
+        
         def update_status(self, message: str): self.status_label.config(text=message); self.root.update_idletasks()
         def on_backend_change(self, event=None): self.backend_router.set_active_backend(self.active_backend.get()); self.save_settings(); self.test_connection()
         def test_connection(self):
@@ -414,44 +538,117 @@ def run_gui():
             def index_worker():
                 try:
                     for file_path in Path(folder).rglob("*"):
-                        if file_path.is_file() and (content := process_file(str(file_path))): self.rag_system.add_document(file_path.name, content)
-                    self.update_status("Folder indexed successfully")
-                except Exception as e: self.update_status(f"Indexing failed: {e}")
-            threading.Thread(target=index_worker, daemon=True).start()
+                        if self.shutdown_event.is_set():
+                            logging.info("Shutdown event set, stopping indexing.")
+                            break
+                        if file_path.is_file():
+                            self.update_status(f"Indexing: {file_path.name}")
+                            content = process_file(str(file_path))
+                            if content:
+                                self.rag_system.add_document(file_path.name, content)
+                    if not self.shutdown_event.is_set():
+                        self.update_status("Folder indexed successfully")
+                except Exception as e:
+                    logging.error(f"Indexing failed: {e}", exc_info=True)
+                    self.update_status(f"Indexing failed: {e}")
+            threading.Thread(target=index_worker, name="IndexerThread", daemon=True).start()
         def show_settings(self):
             win = tk.Toplevel(self.root); win.title("Settings"); win.geometry("400x250"); win.transient(self.root); win.configure(bg=self.BG_COLOR)
             frame = ttk.Frame(win, padding=10); frame.pack(fill="both", expand=True)
             ttk.Label(frame, text="Temperature:").grid(row=0, column=0, sticky="w"); ttk.Scale(frame, from_=0.0, to=1.0, variable=self.temperature, orient="horizontal").grid(row=0, column=1, sticky="ew", padx=5)
-            ttk.Label(frame, text="Max Tokens:").grid(row=1, column=0, sticky="w", pady=10); tokens_entry = ttk.Entry(frame); tokens_entry.insert(0, str(self.max_tokens.get())); tokens_entry.grid(row=1, column=1, sticky="ew", padx=5)
+            
+            ttk.Label(frame, text="Max Tokens:").grid(row=1, column=0, sticky="w", pady=10)
+            vcmd = (self.root.register(lambda P: P.isdigit() or P == ""), '%P')
+            tokens_entry = ttk.Entry(frame, validate='key', validatecommand=vcmd)
+            tokens_entry.insert(0, str(self.max_tokens.get()))
+            tokens_entry.grid(row=1, column=1, sticky="ew", padx=5)
+
             ttk.Button(frame, text="Manage API Keys", command=self.show_api_key_manager).grid(row=2, column=0, columnspan=2, pady=15)
             def save():
-                try: self.max_tokens.set(int(tokens_entry.get())); self.save_settings(); win.destroy(); self.update_status("Settings saved")
-                except ValueError: messagebox.showerror("Error", "Invalid max tokens value", parent=win)
+                try:
+                    max_tokens_val = tokens_entry.get()
+                    if max_tokens_val:
+                        self.max_tokens.set(int(max_tokens_val))
+                    else:
+                        # or set to a default if empty
+                        self.max_tokens.set(2000) 
+                    self.save_settings()
+                    win.destroy()
+                    self.update_status("Settings saved")
+                except ValueError:
+                    messagebox.showerror("Error", "Invalid max tokens value. Please enter a number.", parent=win)
             ttk.Button(frame, text="Save & Close", command=save).grid(row=3, column=0, columnspan=2, pady=10)
         def show_api_key_manager(self):
-            win = tk.Toplevel(self.root); win.title("API Key Management"); win.geometry("500x200"); win.transient(self.root); win.configure(bg=self.BG_COLOR)
-            services = ["OpenAI", "Anthropic", "Mistral"]; entries = {}
+            win = tk.Toplevel(self.root); win.title("API Key Management"); win.geometry("600x250"); win.transient(self.root); win.configure(bg=self.BG_COLOR)
+            services = ["OpenAI", "Anthropic", "Mistral", "Gemini"]; entries = {}
             frame = ttk.Frame(win, padding=10); frame.pack(fill="both", expand=True)
+
+            # A map to associate service names with their backend classes
+            backend_map = {
+                "OpenAI": OpenAIBackend,
+                "Anthropic": AnthropicBackend,
+                "Mistral": MistralBackend,
+                "Gemini": GeminiBackend
+            }
+
+            def test_key(service_name, key_entry):
+                api_key = key_entry.get()
+                if not api_key or api_key == "**********":
+                    messagebox.showwarning("Input Error", "Please enter an API key to test.", parent=win)
+                    return
+                
+                backend_class = backend_map.get(service_name)
+                if not backend_class:
+                    messagebox.showerror("Error", f"Could not find backend for {service_name}", parent=win)
+                    return
+
+                # Create a temporary instance of the backend with the key from the entry field
+                # This is now clean and generic thanks to the standardized __init__ methods.
+                temp_backend = backend_class(api_key=api_key)
+                
+                success, message = temp_backend.test_connection()
+                if success:
+                    messagebox.showinfo("Connection Test", f"Successfully connected to {service_name}!", parent=win)
+                else:
+                    messagebox.showerror("Connection Test", f"Failed to connect to {service_name}:\n{message}", parent=win)
+
             for i, service in enumerate(services):
                 ttk.Label(frame, text=f"{service} API Key:").grid(row=i, column=0, sticky="w", padx=5, pady=5)
-                entry = ttk.Entry(frame, width=50, show="*");
-                if SecretsManager.get_api_key(service): entry.insert(0, "**********")
-                entry.grid(row=i, column=1, sticky="ew", padx=5, pady=5); entries[service] = entry
-            def save_keys():
-                for service, entry in entries.items():
-                    if (key := entry.get()) and key != "**********": SecretsManager.set_api_key(service, key)
-                messagebox.showinfo("API Keys", "API keys saved securely.", parent=win)
-                self.backend_router._discover_and_init_backends(); self.backend_combo.configure(values=self.backend_router.get_backend_names()); self.test_connection()
-                win.destroy()
-            ttk.Button(frame, text="Save Keys", command=save_keys).grid(row=len(services), column=0, columnspan=2, pady=20)
+                entry = ttk.Entry(frame, width=40, show="*")
+                if SecretsManager.get_api_key(service):
+                    entry.insert(0, "**********")
+                entry.grid(row=i, column=1, sticky="ew", padx=5, pady=5)
+                entries[service] = entry
+            
+                test_button = ttk.Button(frame, text="Test", command=lambda s=service, e=entry: test_key(s, e))
+                test_button.grid(row=i, column=2, padx=(5,0))
 
+            def save_keys():
+                keys_changed = False
+                for service, entry in entries.items():
+                    key = entry.get()
+                    if key and key != "**********":
+                        SecretsManager.set_api_key(service, key)
+                        keys_changed = True
+                
+                if keys_changed:
+                    messagebox.showinfo("API Keys", "API keys saved securely.", parent=win)
+                    # Re-discover backends only if keys have actually changed
+                    self.backend_router._discover_and_init_backends()
+                    self.backend_combo.configure(values=self.backend_router.get_backend_names())
+                    self.test_connection()
+                win.destroy()
+        
+            save_button = ttk.Button(frame, text="Save & Close", command=save_keys)
+            save_button.grid(row=len(services), column=0, columnspan=3, pady=20)
+        
         def show_prompt_studio(self):
             win = tk.Toplevel(self.root); win.title("Prompt Studio"); win.geometry("800x600"); win.transient(self.root); win.configure(bg=self.BG_COLOR)
             main_frame = ttk.Frame(win, padding=10); main_frame.pack(fill="both", expand=True); main_frame.grid_columnconfigure(1, weight=1); main_frame.grid_rowconfigure(0, weight=1)
-
+            
             left_pane = ttk.Frame(main_frame); left_pane.grid(row=0, column=0, sticky="ns", padx=(0, 10))
             listbox = tk.Listbox(left_pane, bg=self.WIDGET_BG, fg=self.FG_COLOR, highlightthickness=0, borderwidth=0); listbox.pack(side="left", fill="y", expand=True)
-
+            
             right_pane = ttk.Frame(main_frame); right_pane.grid(row=0, column=1, sticky="nsew")
             right_pane.grid_rowconfigure(1, weight=1); right_pane.grid_columnconfigure(0, weight=1)
             ttk.Label(right_pane, text="Template Name:").grid(row=0, column=0, sticky="w")
@@ -460,40 +657,55 @@ def run_gui():
 
             def load_templates():
                 listbox.delete(0, tk.END)
-                for row in self.db_conn.cursor().execute("SELECT name FROM prompt_templates ORDER BY name"): listbox.insert(tk.END, row[0])
+                for row in self.db_conn.execute("SELECT name FROM prompt_templates ORDER BY name"):
+                    listbox.insert(tk.END, row[0])
 
             def on_select(evt):
                 if not listbox.curselection(): return
                 name = listbox.get(listbox.curselection())
-                if template := self.db_conn.cursor().execute("SELECT template FROM prompt_templates WHERE name = ?", (name,)).fetchone():
-                    name_entry.delete(0, tk.END); name_entry.insert(0, name)
-                    text_editor.delete("1.0", tk.END); text_editor.insert("1.0", template[0])
+                try:
+                    template = self.db_conn.execute("SELECT template FROM prompt_templates WHERE name = ?", (name,)).fetchone()[0]
+                    name_entry.delete(0, tk.END)
+                    name_entry.insert(0, name)
+                    text_editor.delete("1.0", tk.END)
+                    text_editor.insert("1.0", template)
+                except (TypeError, IndexError):
+                    pass # Template not found
             listbox.bind('<<ListboxSelect>>', on_select)
 
             def save_template():
                 name, template = name_entry.get().strip(), text_editor.get("1.0", tk.END).strip()
                 if not name or not template: messagebox.showerror("Error", "Name and template cannot be empty.", parent=win); return
-                self.db_conn.cursor().execute("INSERT OR REPLACE INTO prompt_templates (name, template) VALUES (?, ?)", (name, template)); load_templates()
+                self.db_conn.execute("INSERT OR REPLACE INTO prompt_templates (name, template) VALUES (?, ?)", (name, template))
+                load_templates()
 
             def delete_template():
                 if not listbox.curselection(): return
                 name = listbox.get(listbox.curselection())
                 if messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete '{name}'?", parent=win):
-                    self.db_conn.cursor().execute("DELETE FROM prompt_templates WHERE name = ?", (name,)); name_entry.delete(0, tk.END); text_editor.delete("1.0", tk.END); load_templates()
+                    self.db_conn.execute("DELETE FROM prompt_templates WHERE name = ?", (name,))
+                    name_entry.delete(0, tk.END)
+                    text_editor.delete("1.0", tk.END)
+                    load_templates()
 
             def use_template():
                 if not listbox.curselection(): return
                 name = listbox.get(listbox.curselection())
-                if template := self.db_conn.cursor().execute("SELECT template FROM prompt_templates WHERE name = ?", (name,)).fetchone():
-                    self.input_entry.delete(0, tk.END); self.input_entry.insert(0, template[0]); win.destroy()
+                try:
+                    template = self.db_conn.execute("SELECT template FROM prompt_templates WHERE name = ?", (name,)).fetchone()[0]
+                    self.input_entry.delete(0, tk.END)
+                    self.input_entry.insert(0, template)
+                    win.destroy()
+                except (TypeError, IndexError):
+                    pass # Template not found
 
             button_frame = ttk.Frame(right_pane); button_frame.grid(row=2, column=0, columnspan=2, pady=5)
             for text, cmd in [("Save", save_template), ("Delete", delete_template), ("New", lambda: (name_entry.delete(0, tk.END), text_editor.delete("1.0", tk.END)))]:
                 ttk.Button(button_frame, text=text, command=cmd).pack(side="left", padx=5)
             ttk.Button(button_frame, text="Use in Chat", command=use_template).pack(side="right", padx=5)
-
+            
             load_templates()
-
+        
         def show_compare_window(self):
             win = tk.Toplevel(self.root); win.title("Compare & Diff Models"); win.geometry("1200x800"); win.transient(self.root); win.configure(bg=self.BG_COLOR)
             main_frame = ttk.Frame(win, padding=10); main_frame.pack(fill="both", expand=True); main_frame.grid_rowconfigure(2, weight=1); main_frame.grid_columnconfigure(0, weight=1); main_frame.grid_columnconfigure(1, weight=1)
@@ -557,22 +769,101 @@ def run_gui():
                 self.chat_text.insert(tk.END, f"{role}: ", ("role_user" if role == "You" else "role_assistant")); self.chat_text.insert(tk.END, f"{msg['content']}\n\n")
             self.chat_text.tag_configure("role_user", font=self.BOLD_FONT, foreground="#90ee90"); self.chat_text.tag_configure("role_assistant", font=self.BOLD_FONT, foreground="#add8e6")
             self.chat_text.config(state=tk.DISABLED); self.chat_text.see(tk.END)
-
+        
         def handle_command(self, command_text: str):
             parts = command_text.strip().split()
             command = parts[0].lower()
             args = parts[1:]
-
+            
             command_map = {
                 "/models": self.handle_command_models,
                 "/bench": self.handle_command_bench,
-                "/doc.citations": self.handle_command_doc_citations
+                "/citations": self.handle_command_doc_citations,
+                "/memory": self.handle_command_memory,
+                "/vision.ask": self.handle_command_vision_ask,
+                "/export": self.handle_command_export,
             }
-
+            
             if command in command_map:
                 command_map[command](args)
             else:
                 self.add_system_message(f"Unknown command: {command}")
+
+        def handle_command_memory(self, args):
+            if not args:
+                self.add_system_message("Usage: /memory [add|list|clear] [text...]")
+                return
+            
+            sub_command = args[0].lower()
+            if sub_command == "add":
+                text_to_add = " ".join(args[1:])
+                if not text_to_add:
+                    self.add_system_message("Usage: /memory add [text to remember]")
+                    return
+                self.db_conn.execute("INSERT INTO memories (content) VALUES (?)", (text_to_add,))
+                self.add_system_message(f"Memory added: '{text_to_add}'")
+            elif sub_command == "list":
+                memories = self.db_conn.execute("SELECT id, content FROM memories ORDER BY created_at DESC LIMIT 10").fetchall()
+                if not memories:
+                    self.add_system_message("No memories found.")
+                    return
+                message = "Recent memories:\n" + "\n".join(f"- (ID: {m[0]}) {m[1]}" for m in memories)
+                self.add_system_message(message)
+            elif sub_command == "clear":
+                self.db_conn.execute("DELETE FROM memories")
+                self.add_system_message("All memories cleared.")
+            else:
+                self.add_system_message(f"Unknown memory command: {sub_command}")
+
+        def handle_command_vision_ask(self, args):
+            if not self.attachments:
+                self.add_system_message("Please attach an image first to use /vision.ask")
+                return
+            
+            question = " ".join(args)
+            if not question:
+                self.add_system_message("Usage: /vision.ask [question about the attached image]")
+                return
+            
+            # Use the last attached file for the vision query
+            last_attachment = self.attachments[-1]
+            self.add_system_message(f"Asking vision model about '{Path(last_attachment).name}'...")
+            
+            # Prepend the question to the user message for the next send
+            self.input_entry.delete(0, tk.END)
+            self.input_entry.insert(0, f"[Vision Question: {question}]")
+            self.send_message()
+
+        def handle_command_export(self, args):
+            if not args or args[0].lower() not in ["md", "json"]:
+                self.add_system_message("Usage: /export [md|json]")
+                return
+            
+            format_type = args[0].lower()
+            project = self.current_project.get()
+            initial_filename = f"{project.replace(' ', '_')}.{format_type}"
+            
+            if format_type == "md":
+                filepath = filedialog.asksaveasfilename(defaultextension=".md", filetypes=[("Markdown", "*.md")], initialfilename=initial_filename)
+                if not filepath: return
+                try:
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(f"# {project} Chat Export\n\n")
+                        for m in self.messages:
+                            f.write(f"## {'You' if m['role'] == 'user' else 'Assistant'}\n{m['content']}\n\n")
+                    self.update_status(f"Exported to {Path(filepath).name}")
+                except Exception as e:
+                    messagebox.showerror("Export Error", f"Failed to export: {e}")
+            
+            elif format_type == "json":
+                filepath = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")], initialfilename=initial_filename)
+                if not filepath: return
+                try:
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        json.dump(self.messages, f, indent=2)
+                    self.update_status(f"Exported to {Path(filepath).name}")
+                except Exception as e:
+                    messagebox.showerror("Export Error", f"Failed to export: {e}")
 
         def add_system_message(self, message: str):
             self.chat_text.config(state=tk.NORMAL)
@@ -587,15 +878,41 @@ def run_gui():
             self.add_system_message(message)
 
         def handle_command_bench(self, args):
-            self.add_system_message("Benchmark feature is coming soon.")
+            active_backend = self.backend_router.get_active_backend()
+            if not active_backend:
+                self.add_system_message("No active backend selected.")
+                return
+
+            def bench_worker():
+                self.add_system_message(f"Running benchmark on {active_backend.get_name()}...")
+                start_time = time.monotonic()
+                try:
+                    # A simple, non-streaming test
+                    response = "".join(list(active_backend.stream_chat([{"role": "user", "content": "Hello!"}], max_tokens=5)))
+                    duration = time.monotonic() - start_time
+                    if "Error:" in response:
+                        self.add_system_message(f"Benchmark failed: {response}")
+                    else:
+                        self.add_system_message(f"Benchmark complete. Response time: {duration:.2f}s")
+                except Exception as e:
+                    self.add_system_message(f"Benchmark failed with an error: {e}")
+            
+            threading.Thread(target=bench_worker, daemon=True).start()
 
         def handle_command_doc_citations(self, args):
-            self.add_system_message("Document citation feature is coming soon.")
+            if not hasattr(self, 'last_rag_results') or not self.last_rag_results:
+                self.add_system_message("No document citations found. Please ask a question that uses the RAG system first.")
+                return
+            
+            message = "Citations from last RAG query:\n"
+            for i, res in enumerate(self.last_rag_results):
+                message += f"{i+1}. Source: {res['source']} (Distance: {res['distance']:.4f})\n"
+            self.add_system_message(message)
 
         def send_message(self, event=None):
             text = self.input_entry.get().strip()
             if not text and not self.attachments: return
-
+            
             if text.startswith("/"):
                 self.handle_command(text)
                 self.input_entry.delete(0, tk.END)
@@ -605,10 +922,14 @@ def run_gui():
             project = self.current_project.get()
             save_message(self.db_conn, project, "user", text, [{"path": p} for p in self.attachments]); self.messages.append({"role": "user", "content": text}); self.display_messages()
             attachment_text = "\n\nAttachments:\n" + "\n".join(f"File: {Path(p).name}\n{process_file(p)[:500]}..." for p in self.attachments) if self.attachments else ""
+            
             rag_context = ""
+            self.last_rag_results = [] # Clear previous results
             if self.rag_enabled.get() and text:
                 try:
-                    if results := self.rag_system.search(text): rag_context = "\n\nRelevant context:\n" + "\n".join(f"Source: {res['source']}\n{res['content'][:200]}..." for res in results[:3])
+                    if results := self.rag_system.search(text):
+                        self.last_rag_results = results
+                        rag_context = "\n\nRelevant context:\n" + "\n".join(f"Source: {res['source']}\n{res['content'][:200]}..." for res in results[:3])
                 except Exception as e: print(f"RAG error: {e}")
             full_message = text + attachment_text + rag_context
             self.attachments.clear()
@@ -616,39 +937,58 @@ def run_gui():
             if not active_backend: self.update_status("Error: No backend selected."); return
             self.update_status(f"Generating response from {active_backend.get_name()}...")
             api_messages = [{"role": m["role"], "content": m["content"]} for m in self.messages[-10:] if m['role'] != 'system']; api_messages.append({"role": "user", "content": full_message})
-
+            
             self.chat_text.config(state=tk.NORMAL); self.chat_text.insert(tk.END, "Assistant: ", "role_assistant"); self.chat_text.config(state=tk.DISABLED)
-
+            
             def stream_response():
                 start_time = time.monotonic()
                 prompt_tokens, completion_tokens, response_text = 0, 0, ""
-                if self.tokenizer: prompt_tokens = len(self.tokenizer.encode(full_message))
+                if self.tokenizer:
+                    try:
+                        prompt_tokens = len(self.tokenizer.encode(full_message))
+                    except Exception as e:
+                        logging.warning(f"Could not encode prompt for token counting: {e}")
 
                 try:
                     kwargs = {"model": "gpt-4-turbo", "max_tokens": self.max_tokens.get(), "temperature": self.temperature.get()}
                     if isinstance(active_backend, OllamaBackend): kwargs['model'] = 'llama3'
                     elif isinstance(active_backend, AnthropicBackend): kwargs['model'] = 'claude-3-opus-20240229'
                     elif isinstance(active_backend, MistralBackend): kwargs['model'] = 'mistral-large-latest'
-
+                    # Gemini model is set in its __init__
+                    
                     for chunk in active_backend.stream_chat(api_messages, **kwargs):
+                        if self.shutdown_event.is_set():
+                            logging.info("Shutdown event set, stopping chat stream.")
+                            break
                         response_text += chunk
                         self.chat_text.config(state=tk.NORMAL); self.chat_text.insert(tk.END, chunk); self.chat_text.see(tk.END); self.chat_text.config(state=tk.DISABLED); self.root.update_idletasks()
+                    
+                    if self.shutdown_event.is_set():
+                        return
 
                     latency = time.monotonic() - start_time
-                    if self.tokenizer: completion_tokens = len(self.tokenizer.encode(response_text))
+                    if self.tokenizer:
+                        try:
+                            completion_tokens = len(self.tokenizer.encode(response_text))
+                        except Exception as e:
+                            logging.warning(f"Could not encode response for token counting: {e}")
+                    
                     total_tokens = prompt_tokens + completion_tokens
-
+                    
                     self.latency_var.set(f"Latency: {latency:.2f}s")
                     self.tokens_var.set(f"Tokens: {total_tokens} (P: {prompt_tokens}, C: {completion_tokens})")
-                    self.cost_var.set(f"Cost: {active_backend.get_cost(kwargs['model'], prompt_tokens, completion_tokens)}")
+                    self.cost_var.set(f"Cost: {active_backend.get_cost(kwargs.get('model', 'default'), prompt_tokens, completion_tokens)}")
 
-                    save_message(self.db_conn, project, "assistant", response_text); self.messages.append({"role": "assistant", "content": response_text})
+                    save_message(self.db_conn, project, "assistant", response_text)
+                    self.messages.append({"role": "assistant", "content": response_text})
                     self.chat_text.config(state=tk.NORMAL); self.chat_text.insert(tk.END, "\n\n"); self.chat_text.config(state=tk.DISABLED)
                     self.update_status("Ready")
                 except Exception as e:
-                    self.chat_text.config(state=tk.NORMAL); self.chat_text.insert(tk.END, f"Error: {e}"); self.chat_text.config(state=tk.DISABLED)
-                    self.update_status("Error occurred")
-            threading.Thread(target=stream_response, daemon=True).start()
+                    logging.error(f"Error during chat stream: {e}", exc_info=True)
+                    error_text = f"\n\n--- An error occurred: {e} ---"
+                    self.chat_text.config(state=tk.NORMAL); self.chat_text.insert(tk.END, error_text); self.chat_text.config(state=tk.DISABLED)
+                    self.update_status(f"Error: {e}")
+            threading.Thread(target=stream_response, name="ChatStreamThread", daemon=True).start()
         def run(self): self.hotkey_manager.start(); self.root.mainloop()
 
     app = OmniMindStudio()
@@ -663,6 +1003,7 @@ def main():
     pass
 
 if __name__ == "__main__":
+    setup_logging()
     if HEADLESS:
         main()
     else:
