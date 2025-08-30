@@ -1,70 +1,53 @@
-<img width="1024" height="1024" alt="ChatGPT Image Aug 29, 2025, 10_52_13 PM" src="https://github.com/user-attachments/assets/46d3536b-f7f3-424a-b4db-b4d82d30b23c" />
-
+<img width="1024" height="1024" alt="OmniMind Studio Logo" src="https://github.com/user-attachments/assets/46d3536b-f7f3-424a-b4db-b4d82d30b23c" />
 
 # OmniMind Studio
 
-*The Indie-Pro AI Desktop That Beats Claude for Windows*
+*Your Local-First, Cloud-Ready, AI Powerhouse*
 
 ---
 
 ## Overview
 
-OmniMind Studio is a **one-pager Python desktop app** that integrates local and commercial LLMs, advanced RAG, voice and screenshots, and project management into a clean Windows application. It is self-bootstrapping (installs its own dependencies), works offline with LM Studio, and scales to cloud APIs when needed.
+OmniMind Studio is a powerful, single-file Python desktop application for Windows that serves as a comprehensive interface for a wide range of local and commercial Large Language Models (LLMs). It features an advanced Retrieval-Augmented Generation (RAG) system, robust multi-backend support, and a suite of productivity tools designed for developers, writers, and AI enthusiasts.
 
-This repository contains:
+The application is self-bootstrapping, automatically managing its own virtual environment and dependencies, making setup a breeze.
 
-* **`claudex_pro.py`** → the main app (Tk desktop, RAG, voice, screenshots, projects).
-* **`claudex_ultra.db`** → the official SQLite database (projects, messages, settings, indexed docs).
+## Key Features
 
----
+### 🔌 Universal Backend Connectivity
 
-## Key Features (Already Implemented)
+*   **Backend Abstraction Layer:** Connect to any supported AI model through a unified interface.
+*   **Local Models:** Full support for **LM Studio** and **Ollama**, allowing you to run powerful models entirely offline.
+*   **Commercial Models:** Seamless integration with major API providers:
+    *   **OpenAI** (e.g., GPT-4, GPT-3.5)
+    *   **Anthropic** (e.g., Claude 3 Opus, Sonnet, Haiku)
+    *   **Mistral** (e.g., Mistral Large)
+*   **Secure API Key Management:** API keys are stored securely in the native **Windows Credential Manager** using the `keyring` library.
 
-### 🔌 Local Backend Integration
+### 🧠 RAG 2.0: Supercharged Memory
 
-* **LM Studio backend** with streaming responses
-* Self-contained client class (`LMStudioClient`) with connection testing
+*   **High-Speed Vector Search:** The RAG system is powered by **`vectorlite`**, a high-performance SQLite extension that provides incredibly fast and efficient local vector similarity searches.
+*   **Flexible Document Indexing:** Index entire folders of documents (`.txt`, `.md`, `.pdf`, `.docx`, and more) to create a custom knowledge base for your projects.
+*   **Source-Grounded Responses:** The groundwork for full RAG citations is in place, with the system retrieving the source of information used in its responses.
 
-### 🧠 RAG (Retrieval-Augmented Generation)
+### 🛠️ Advanced UI & UX
 
-* Document ingestion (TXT, MD, PY, JS, HTML, CSS, PDF, DOCX, images as placeholders)
-* Embeddings via **sentence-transformers/all-MiniLM-L6-v2**
-* Search with cosine similarity on embeddings
-* Results injected into prompt context
+*   **Modern Dark Theme:** A clean, professional, and visually appealing dark theme applied across the entire application for comfortable use.
+*   **Compare & Diff View:** Open a dedicated window to send the same prompt to two different models simultaneously and view their responses side-by-side, with a color-coded diff to highlight differences.
+*   **Performance HUD:** A real-time Heads-Up Display shows the **latency**, **token count** (prompt and completion), and estimated **cost** for each interaction with a commercial model.
+*   **Global Hotkey:** Bring OmniMind Studio to the foreground from anywhere in Windows using the system-wide hotkey: **`Ctrl+Alt+Space`**.
+*   **Prompt Studio:** Create, save, and manage a library of your favorite and most-used prompt templates for quick reuse.
 
-### 📁 Project & Message Management
+### 👁️ Multimodal Capabilities
 
-* Projects stored in SQLite (`projects`, `messages`, `settings`, `rag_documents`)
-* Add, switch, and manage projects from toolbar
-* Persisted chat history, attachments, and settings per project
+*   **Image-to-Text (OCR):** The application can "read" text from attached images (`.png`, `.jpg`, etc.) using the Tesseract OCR engine and incorporate that text into your prompt context.
 
-### 🎤 Voice & Audio
+### ⚡ Commands & Productivity
 
-* Text-to-speech via `pyttsx3`
-* Speech recognition via Google STT (`speech_recognition` + `pyaudio`)
-* Hotkey voice input
-
-### 🖼️ Screenshots & Files
-
-* Capture full screen (via `PIL.ImageGrab`)
-* Attach files (PDF, DOCX, TXT, MD, images, etc.)
-* Inline content preview from attachments
-
-### 💾 Export & Sharing
-
-* Export chats to **Markdown** with timestamps and role formatting
-
-### 🛠️ UI & UX
-
-* Tkinter desktop app with dark theme
-* Resizable window, toolbar, chat pane, input box, status bar
-* Hotkeys: Enter to send, Ctrl+Alt+Space overlay planned
-* Status updates (connection, RAG indexing, errors)
-
-### ⚙️ Settings
-
-* Configurable **temperature**, **max tokens**, and RAG enable/disable
-* Stored in SQLite `settings` table
+*   **Slash Commands:** Use powerful slash commands directly in the input box for advanced actions.
+    *   `/models`: Lists all available and configured backends.
+    *   `/bench`: (Placeholder) For benchmarking model performance.
+    *   `/doc.citations`: (Placeholder) For advanced citation-based responses.
 
 ---
 
@@ -72,94 +55,36 @@ This repository contains:
 
 ### Requirements
 
-* **Windows 10/11**
-* **Python 3.10+**
+*   **Windows 10/11**
+*   **Python 3.10+**
+*   **(Optional) Tesseract OCR:** To enable the OCR feature for images, you must have Google's Tesseract OCR engine installed and available in your system's PATH. You can find installers on the official [Tesseract GitHub page](https://github.com/tesseract-ocr/tessdoc).
 
 ### First Run
 
+No complex setup is required. Simply run the script from your terminal:
+
 ```bash
-python claudex_pro.py
+python omnimind_studio.py
 ```
 
-On launch the app will:
-
-1. Create a `.venv` virtual environment if missing.
-2. Auto-install all required dependencies.
-3. Relaunch itself inside the venv.
-
----
-
-## Dependencies (auto-installed)
-
-* `requests`
-* `tkinter-tooltip`
-* `Pillow`
-* `numpy`
-* `scikit-learn`
-* `sentence-transformers`
-* `pyttsx3`
-* `SpeechRecognition`
-* `pyaudio`
-* `python-docx`
-* `PyMuPDF`
-* `openai`
+On the first launch, the application will automatically:
+1.  Create a local `.venv` virtual environment in its directory.
+2.  Install all required Python dependencies into the venv.
+3.  Relaunch itself inside the fully configured environment.
 
 ---
 
-## Database
+## Backend Setup
 
-* The app uses **`claudex_ultra.db`** as its **canonical database**.
-* Legacy `claudex.db` is deprecated; delete or archive it.
-* Schema includes:
+To use commercial models from OpenAI, Anthropic, or Mistral, you need to add your API keys.
 
-  * `projects`
-  * `messages`
-  * `settings`
-  * `rag_documents`
-
----
-
-## Usage
-
-* Select or create a **project** from the toolbar.
-* Type a message, attach files or screenshots, and send.
-* Toggle **RAG** to inject relevant indexed content.
-* Export a chat to **Markdown** anytime.
-* Use **voice input** to dictate a query.
-
----
-
-## Current Limitations
-
-* Only LM Studio backend implemented (no Ollama, OpenAI, Anthropic, etc. yet).
-* Region screenshot not yet supported (fullscreen only).
-* No global overlay hotkey yet.
-* RAG uses SQLite with byte embeddings only (no FAISS/Qdrant adapter).
-
----
-
-## Roadmap (for Jules AI)
-
-* 🔗 Add full backend abstraction (Ollama, llama.cpp, Anthropic, OpenAI, Mistral, Gemini, etc.)
-* 📚 Upgrade RAG with SQLite-VSS + FAISS/Qdrant, citations, re-ranking
-* 🖼️ Vision + OCR (Tesseract, PaddleOCR, Gemini Vision)
-* 🎤 Faster-Whisper STT + Piper TTS
-* 🔥 Global overlay hotkey, quick capture HUD
-* 📊 Cost/latency HUD + per-backend health checks
-* 🛡️ Privacy (local-only mode, secrets vault, audit logs)
-* ⚡ Packaging (PyInstaller EXE, MSIX installer, auto-update)
+1.  Click the **"Settings"** button in the toolbar.
+2.  In the Settings window, click **"Manage API Keys"**.
+3.  Enter your API keys into the respective fields.
+4.  Click **"Save Keys"**. Your keys will be stored securely in the Windows Credential Manager. They are **not** stored in plain text.
 
 ---
 
 ## License
 
-MIT (placeholder — adjust before release)
-
----
-
-## Author
-
-Guillaume Lessard – iD01t Productions
-
-
-
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

@@ -1,0 +1,2 @@
+This is a placeholder file to create the assets directory.
+The build script expects logo files (e.g., Logo44x44.png) to be here for MSIX packaging.
