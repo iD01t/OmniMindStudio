@@ -1,0 +1,42 @@
+[
+    {
+        "name": "LM Studio - Basic Chat",
+        "backend": "LM Studio",
+        "prompt": "In one sentence, what is a large language model?",
+        "expected": {
+            "contains": "language model"
+        }
+    },
+    {
+        "name": "Ollama - Basic Chat",
+        "backend": "Ollama",
+        "prompt": "In one sentence, what is a neural network?",
+        "expected": {
+            "contains": "neural network"
+        }
+    },
+    {
+        "name": "OpenAI - Coding Task",
+        "backend": "OpenAI",
+        "prompt": "Write a python function `add(a, b)` that returns the sum of two numbers.",
+        "expected": {
+            "contains": ["def add", "return a + b"]
+        }
+    },
+    {
+        "name": "Anthropic - General Knowledge",
+        "backend": "Anthropic",
+        "prompt": "What is the capital of France?",
+        "expected": {
+            "contains": "Paris"
+        }
+    },
+    {
+        "name": "Mistral - Creative Writing",
+        "backend": "Mistral",
+        "prompt": "Write a single sentence that starts with 'The last ship left at dawn'.",
+        "expected": {
+            "contains": "The last ship left at dawn"
+        }
+    }
+]
