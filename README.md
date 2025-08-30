@@ -1,10 +1,12 @@
+
+<img width="1024" height="1024" alt="ChatGPT Image Aug 29, 2025, 10_52_13 PM" src="https://github.com/user-attachments/assets/ce530457-1b14-43e2-984b-b6868fad58d5" />
+
 # OmniMind Studio
 
 **Version 3.0.0**
 
 OmniMind Studio is a feature-rich, all-in-one desktop AI powerhouse for Windows. It provides a unified interface for interacting with multiple local and commercial AI models, a professional-grade RAG (Retrieval-Augmented Generation) system, and a suite of productivity tools designed for developers, writers, and AI enthusiasts.
 
-![OmniMind Studio Screenshot](assets/screenshot.png) *(Note: Placeholder image)*
 
 ## Features
 
