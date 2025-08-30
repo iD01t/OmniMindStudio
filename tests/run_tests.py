@@ -34,7 +34,7 @@ def run_single_test(router, test_case):
     if not backend:
         print(f"  - 💥 FAILED: Backend '{backend_name}' not found or failed to initialize.")
         return False
-
+    
     # For commercial backends, check if the key exists before running
     if backend_name in ["OpenAI", "Anthropic", "Mistral", "Gemini"]:
         # This check relies on the backend's own __init__ logic to check SecretsManager
@@ -49,9 +49,9 @@ def run_single_test(router, test_case):
         response_iterator = backend.stream_chat([{"role": "user", "content": prompt}], temperature=0.01)
         full_response = "".join(list(response_iterator))
         duration = time.monotonic() - start_time
-
+        
         print(f"  - Response received in {duration:.2f}s.")
-
+        
         if not full_response or "Error:" in full_response:
              print(f"  - 💥 FAILED: Received an error or empty response: {full_response[:100]}...")
              return False
@@ -60,13 +60,13 @@ def run_single_test(router, test_case):
             checks = expected["contains"]
             if not isinstance(checks, list):
                 checks = [checks]
-
+            
             for check_str in checks:
                 if check_str.lower() not in full_response.lower():
                     print(f"  - 💥 FAILED: Response did not contain '{check_str}'.")
                     print(f"     Response: {full_response[:200]}...")
                     return False
-
+        
         print("  - ✅ PASSED")
         return True
 
@@ -81,15 +81,15 @@ def main():
     print("=====================================")
     print("  OmniMind Studio - Integration Tests")
     print("=====================================")
-
+    
     router = BackendRouter()
-
+    
     passed, failed, skipped = 0, 0, 0
-
+    
     try:
         golden_prompts = load_golden_prompts()
         print(f"Loaded {len(golden_prompts)} test cases.\n")
-
+        
         for test_case in golden_prompts:
             result = run_single_test(router, test_case)
             if result is True:
@@ -99,7 +99,7 @@ def main():
             elif result == "skipped":
                 skipped += 1
             print("-" * 35 + "\n")
-
+            
         print("=====================================")
         print("  Test Summary")
         print("=====================================")
@@ -107,13 +107,13 @@ def main():
         print(f"  💥 Failed: {failed}")
         print(f"  ⚠️ Skipped: {skipped}")
         print("=====================================")
-
+        
         # We expect some tests to fail (local backends) or be skipped (commercial backends)
         # in the CI environment, so we don't exit with a non-zero code.
         # A more advanced setup would use pytest markers to selectively run tests.
         if failed > 2: # Allow up to 2 local backend failures
             sys.exit(1)
-
+            
     except Exception as e:
         print(f"A critical error occurred during the test run: {e}")
         import traceback

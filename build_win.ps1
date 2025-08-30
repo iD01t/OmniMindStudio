@@ -61,9 +61,9 @@ $CreateMSIX = $false # Set to $true to attempt MSIX creation
 
 if ($CreateMSIX) {
     Write-Host "Attempting to create MSIX package..."
-
+    
     # IMPORTANT: Change this to match your code signing certificate's subject name.
-    $PublisherName = "CN=YourPublisherName"
+    $PublisherName = "CN=YourPublisherName" 
     $PackageName = "YourCompany.$AppName"
     $PackageDisplayName = "$AppName"
     $PackageVersion = "$AppVersion.0"
@@ -131,12 +131,12 @@ if ($CreateMSIX) {
     else {
         Write-Host "Creating MSIX package..."
         makeappx pack /d "$DistPath" /p "$DistPath\$InstallerName" /o
-
+        
         Write-Host "Signing MSIX package..."
         Write-Host "NOTE: This next step will likely fail unless you have a valid .pfx certificate and have configured the command below."
         # This is a placeholder. You must replace 'YourCert.pfx' and provide the password.
         # signtool sign /a /fd SHA256 /f YourCert.pfx /p YourPassword "$DistPath\$InstallerName"
-
+        
         Write-Host "MSIX package created (unsigned) at '$DistPath\$InstallerName'. You must sign it to install."
     }
 }
